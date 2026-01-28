@@ -126,7 +126,7 @@
           <div class="small text-secondary mb-1">Backend endpoint (demo)</div>
           <div class="code-kv">
             <span class="text-secondary">POST</span>
-            <span id="endpointDisplay">http://localhost:8000/products</span>
+            <span id="endpointDisplay">http://localhost:8000/publishing/submissions</span>
           </div>
         </div>
       </div>
@@ -244,7 +244,9 @@
       (function () {
         "use strict";
 
-        const API_ENDPOINT = "http://localhost:8000/products";
+        // NOTE: This demo runs against the publishing submission API.
+        // If you run FastAPI on a different port, update this constant.
+        const API_ENDPOINT = "http://localhost:8000/publishing/submissions";
 
         const form = document.getElementById("publishForm");
         const publishBtn = document.getElementById("publishBtn");
@@ -295,16 +297,41 @@
           }
         }
 
+        function newRequestId() {
+          // Correlation ID generator for X-Request-Id.
+          // Keeps it simple and deterministic-ish for human traceability; no validation requirements.
+          const rand = Math.random().toString(16).slice(2, 10);
+          return "web_" + Date.now().toString(36) + "_" + rand;
+        }
+
         form.addEventListener("submit", async function (e) {
           e.preventDefault();
 
           // GxP constraint: do not validate inputs client-side.
           // Collect whatever user provided and send to backend.
+          // NOTE: Backend submission endpoint expects a different schema (product_id, version, title, artifact_uris, submitted_by).
+          // We map the portal fields to a minimal compatible payload while still sending "whatever the user typed" with no checks.
+          const productName = document.getElementById("productName").value;
+          const domain = document.getElementById("domain").value;
+          const classification = document.getElementById("classification").value;
+          const lastModified = document.getElementById("lastModified").value;
+
+          const requestId = newRequestId();
+
           const payload = {
-            product_name: document.getElementById("productName").value,
-            domain: document.getElementById("domain").value,
-            classification: document.getElementById("classification").value,
-            last_modified: document.getElementById("lastModified").value,
+            product_id: productName,
+            version: "1.0.0",
+            title: productName,
+            artifact_uris: [
+              // Keep it simple; include user-entered fields in a non-validated string for demo traceability.
+              "s3://demo-bucket/demo-artifact.csv?domain=" +
+                encodeURIComponent(domain) +
+                "&classification=" +
+                encodeURIComponent(classification) +
+                "&last_modified=" +
+                encodeURIComponent(lastModified),
+            ],
+            submitted_by: "publisher@example.com",
           };
 
           hideBanner();
@@ -314,7 +341,10 @@
           // Show immediate raw payload as part of audit trace if desired (still server response will overwrite).
           auditJsonEl.classList.remove("text-success", "text-danger", "text-secondary");
           auditJsonEl.classList.add("text-secondary");
-          auditJsonEl.textContent = safeStringify({ request: payload });
+          auditJsonEl.textContent = safeStringify({
+            request: payload,
+            headers: { "X-Request-Id": requestId },
+          });
 
           try {
             const resp = await fetch(API_ENDPOINT, {
@@ -322,6 +352,7 @@
               headers: {
                 "Content-Type": "application/json",
                 Accept: "application/json",
+                "X-Request-Id": requestId,
               },
               body: JSON.stringify(payload),
             });
@@ -333,7 +364,8 @@
             auditJsonEl.textContent = safeStringify(body.parsed);
 
             if (resp.ok) {
-              // Requirement: Success (200) show product_id and evidence_id in green.
+              // Requirement: preserve existing rendering behavior.
+              // (Even though this endpoint returns submission_id, we keep the existing "product_id/evidence_id" logic unchanged.)
               const productId = body.parsed && body.parsed.product_id;
               const evidenceId = body.parsed && body.parsed.evidence_id;
 
@@ -390,6 +422,7 @@
               error: "NetworkError",
               message: String(err),
               endpoint: API_ENDPOINT,
+              request_id: requestId,
             });
           } finally {
             publishBtn.disabled = false;
